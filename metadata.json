@@ -1,0 +1,7 @@
+{
+  "name": "Copy of GuardianPath Parental Control",
+  "description": "A comprehensive parental control application designed to protect children, manage screen time, and monitor digital activities with AI-powered insights.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
