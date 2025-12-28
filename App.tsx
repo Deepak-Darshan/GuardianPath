@@ -6,64 +6,67 @@ import ParentDashboard from './components/ParentDashboard';
 import ChildView from './components/ChildView';
 import AuthView from './components/AuthView';
 import TopNav from './components/TopNav';
-
-const MOCK_CHILDREN: ChildProfile[] = [
-  {
-    id: 'child_1',
-    name: 'Emma',
-    age: 12,
-    photoUrl: 'https://picsum.photos/seed/emma/200/200',
-    healthScore: 88,
-    totalScreenTimeMinutes: 145,
-    screenTimeLimitMinutes: 180,
-    filterLevel: FilterLevel.PRE_TEEN,
-    lastLocation: {
-      lat: 37.7749,
-      lng: -122.4194,
-      address: 'Near Central High School',
-      timestamp: new Date().toISOString()
-    },
-    activities: [
-      { id: 'app_1', name: 'YouTube', category: 'Entertainment', timeSpentMinutes: 65, isBlocked: false, limitMinutes: 60, icon: '📺' },
-      { id: 'app_2', name: 'TikTok', category: 'Social', timeSpentMinutes: 45, isBlocked: false, limitMinutes: 45, icon: '🎵' },
-      { id: 'app_3', name: 'Math Master', category: 'Education', timeSpentMinutes: 20, isBlocked: false, limitMinutes: 0, icon: '➗' },
-      { id: 'app_4', name: 'Roblox', category: 'Gaming', timeSpentMinutes: 15, isBlocked: true, limitMinutes: 30, icon: '🎮' },
-    ],
-    webLogs: [
-      { id: 'web_1', url: 'khanacademy.org', category: 'Education', status: 'allowed', timestamp: new Date().toISOString() },
-      { id: 'web_2', url: 'reddit.com/r/gaming', category: 'Social', status: 'blocked', timestamp: new Date().toISOString() },
-    ],
-    achievements: [
-      { id: 'a1', name: 'Early Bird', description: 'Screen off before bedtime', icon: '🦉', unlocked: true, category: 'time' },
-      { id: 'a2', name: 'Learning Streak', description: '3 days of Math apps', icon: '🔥', unlocked: false, category: 'streak' },
-      { id: 'a3', name: 'Safe Browser', description: 'Zero blocked attempts', icon: '🛡️', unlocked: true, category: 'learning' },
-    ],
-    goals: [
-      { id: 'g1', title: 'Study for 30m', requirement: 'Use Math Master', reward: '15m extra time', progress: 66, icon: '📚' }
-    ]
-  }
-];
+import { supabase } from './supabaseClient';
+import { supabaseService } from './services/supabaseService';
 
 export default function App() {
   const [view, setView] = useState<AppView>(AppView.AUTH);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [children, setChildren] = useState<ChildProfile[]>(MOCK_CHILDREN);
-  const [timeRequests, setTimeRequests] = useState<TimeRequest[]>([]);
+  const [children, setChildren] = useState<ChildProfile[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
 
-  const handleLogin = (user: User) => {
-    setCurrentUser(user);
-    setView(AppView.PARENT_DASHBOARD);
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (session) {
+        const user: User = {
+          id: session.user.id,
+          name: session.user.user_metadata.full_name || session.user.email?.split('@')[0] || 'Parent',
+          email: session.user.email || '',
+          role: 'parent',
+          children: []
+        };
+        setCurrentUser(user);
+        
+        // Ensure we aren't already loading to prevent double-syncing
+        if (!isLoading) {
+          await loadFamilyData(session.user.id);
+        }
+        
+        setView(AppView.PARENT_DASHBOARD);
+      } else {
+        setCurrentUser(null);
+        setChildren([]);
+        setView(AppView.AUTH);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const loadFamilyData = async (userId: string) => {
+    setIsLoading(true);
+    try {
+      const familyData = await supabaseService.fetchFamilyData(userId);
+      setChildren(familyData);
+    } catch (error) {
+      console.error("Failed to load family data:", error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleAddTimeRequest = (req: TimeRequest) => {
-    setTimeRequests(prev => [...prev, req]);
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
   };
 
-  const handleGrantTime = (childId: string, minutes: number) => {
-    setChildren(prev => prev.map(c => 
-      c.id === childId ? { ...c, screenTimeLimitMinutes: c.screenTimeLimitMinutes + minutes } : c
-    ));
+  const handleGrantTime = async (childId: string, minutes: number) => {
+    try {
+      await supabaseService.updateChildLimit(childId, minutes);
+      if (currentUser) await loadFamilyData(currentUser.id);
+    } catch (error) {
+      console.error("Failed to grant time:", error);
+    }
   };
 
   const updateChildProfile = (updatedChild: ChildProfile) => {
@@ -71,16 +74,30 @@ export default function App() {
   };
 
   const renderContent = () => {
+    if (isLoading) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-50">
+          <div className="text-center">
+            <div className="w-16 h-16 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+            <p className="text-slate-500 font-medium animate-pulse">Syncing Family Cloud...</p>
+            <p className="text-xs text-slate-400 mt-2">Connecting to GuardianPath Servers</p>
+          </div>
+        </div>
+      );
+    }
+
     switch (view) {
       case AppView.AUTH:
-        return <AuthView onLogin={handleLogin} />;
+        return <AuthView onLogin={() => {
+          // No manual call here - onAuthStateChange handles it
+        }} />;
       case AppView.PARENT_DASHBOARD:
         return (
-          <div className="flex flex-col h-screen overflow-hidden">
+          <div className="flex flex-col h-screen overflow-hidden animate-in fade-in duration-500">
             <TopNav 
               user={currentUser} 
               onSwitchToChild={() => setView(AppView.CHILD_VIEW)} 
-              onLogout={() => setView(AppView.AUTH)}
+              onLogout={handleLogout}
             />
             <div className="flex flex-1 overflow-hidden">
               <Sidebar 
@@ -93,20 +110,32 @@ export default function App() {
                   child={children.find(c => c.id === selectedChildId) || null}
                   children={children}
                   alerts={[]}
-                  onToggleAppBlock={(cid, aid) => {}}
+                  onToggleAppBlock={() => {}}
                   onUpdateChild={updateChildProfile}
+                  onRefresh={() => currentUser && loadFamilyData(currentUser.id)}
                 />
               </main>
             </div>
           </div>
         );
       case AppView.CHILD_VIEW:
+        const activeChild = children[0] || null;
+        if (!activeChild) return (
+          <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-900 text-white">
+            <p className="text-xl font-bold mb-4">No child profiles found.</p>
+            <p className="text-slate-400 mb-8">Please add a profile in the Parent Dashboard first.</p>
+            <button onClick={() => setView(AppView.PARENT_DASHBOARD)} className="bg-indigo-600 px-8 py-3 rounded-2xl font-bold">Back to Parent Dashboard</button>
+          </div>
+        );
         return (
           <ChildView 
-            child={children[0]} 
+            child={activeChild} 
             onSwitchToParent={() => setView(AppView.PARENT_DASHBOARD)}
-            onSendRequest={handleAddTimeRequest}
-            onGrantExtraTime={(mins) => handleGrantTime(children[0].id, mins)}
+            onSendRequest={async (req) => {
+               await supabaseService.createTimeRequest(req);
+               if (currentUser) loadFamilyData(currentUser.id);
+            }}
+            onGrantExtraTime={(mins) => handleGrantTime(activeChild.id, mins)}
           />
         );
       default:
